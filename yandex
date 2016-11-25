@@ -1,0 +1,79 @@
+#!/bin/bash
+[ -z "$1" ] && echo "Sintax $0 [link]" && exit 1
+
+url="$1"
+if [[ "$url" =~ ^http: ]]; then
+  url=https:$(echo "$url" | cut -d\: -f2-)
+fi
+
+idClient="undefined$(date +%s)$[ $RANDOM % 999 ]"
+
+tmp=$(mktemp)
+curl "$url" \
+  -H "Host: $(echo "$url" | cut -d\/ -f3)" \
+  -H "User-Agent: Mozilla/5.0 (Windows NT 6.3; WOW64; rv:46.0) Gecko/20100101 Firefox/46.0" \
+  -H "Accept-Language: es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3" --compressed \
+  -c cookie.txt \
+  -H "Connection: keep-alive" > $tmp
+
+[ $? -ne 0 ] && echo "Error getting id" && rm -f $tmp && exit 4
+
+id=$(sed 's/short_url/\nshort_url/g' $tmp | grep ^short_url | head -n1 | cut -d\" -f3 | cut -d\/ -f5)
+out=$(sed 's/file\",\"name\":"/\nname\"/g' $tmp | grep ^name | tail -n1 | cut -d\" -f2 | sed -E 's/\\[a-z][0-9]+/ /g')
+
+rm $tmp
+cat cookie.txt
+
+echo "id: $id"
+echo "out: $out"
+[ -z "$id" ] && echo "Error id" && exit 2
+[ -z "$out" ] && out=file
+
+curl "https://yadi.sk/i/$id" \
+  -H "Host: yadi.sk" \
+  -H "User-Agent: Mozilla/5.0 (Windows NT 6.3; WOW64; rv:46.0) Gecko/20100101 Firefox/46.0" \
+  -H "Accept: application/json, text/javascript, */*; q=0.01" \
+  -H "Accept-Language: es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3" --compressed \
+  -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
+  -H "X-Requested-With: XMLHttpRequest" \
+  -H "Referer: https://yadi.sk/i/$id" \
+  -b cookie.txt \
+  -H "Connection: keep-alive" > ./$id.html
+
+sk=$(sed 's/"skLocal":/\nskLocal/g' ./$id.html | grep ^skLocal | cut -d\" -f2)
+echo "sk: $sk"
+[ -z "$sk" ] && echo "Error sk" && exit 5
+
+public_id=$(sed 's/<div/\ndiv/g' ./$id.html | grep ^div.*data\-key.*view=contentPublic | cut -d\% -f3)
+echo "public-id: $public_id"
+[ -z "$public_id" ] && echo "Error public-id" &&  exit 3
+
+curl "https://yadi.sk/models/?_m=do-get-resource-url" \
+  -H "Host: yadi.sk" \
+  -H "User-Agent: Mozilla/5.0 (Windows NT 6.3; WOW64; rv:46.0) Gecko/20100101 Firefox/46.0" \
+  -H "Accept: application/json, text/javascript, */*; q=0.01" \
+  -H "Accept-Language: es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3" --compressed \
+  -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
+  -H "X-Requested-With: XMLHttpRequest" \
+  -H "Referer: https://yadi.sk/i/$id" \
+  -b cookie.txt \
+  --data "idClient=$idClient&version=4.3&sk=$sk&_model.0=do-get-resource-url&id.0="%"2Fpublic"%"$public_id"%"3D" > ./$id.info
+
+echo "+++ INFO: +++"
+cat ./$id.info
+echo "+++ +++++ +++"
+
+link=$(sed 's/"file":"/\nfile"/g' ./$id.info | grep ^file\" | cut -d\" -f2)
+folder=$(sed 's/"folder":/\nfolder/g' ./$id.info | grep ^folder | cut -d\" -f2)
+
+echo "link: $link"
+echo "folder: $folder"
+
+[ -z "$link" ] && link="$folder"
+[ -z "$link" ] && echo "Error link nor folder" && exit 6
+
+wget "$link" -qO "$out"
+
+if [ $? -eq 0 ]; then
+  rm ./$id.*
+fi
